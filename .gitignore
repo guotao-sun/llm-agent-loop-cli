@@ -1,0 +1,25 @@
+# 含 API Key 的配置文件一律不入库（示例文件 *_config.example.txt 除外）
+*_config.txt
+.env
+.env.*
+
+# 运行产物：个人档案、归档、报文日志、临时记录、覆盖备份
+memory/
+logs/
+workspace/
+transcript_*.txt
+.backups/
+
+# Python 缓存与构建产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
