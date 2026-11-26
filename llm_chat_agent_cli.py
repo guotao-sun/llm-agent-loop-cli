@@ -85,6 +85,14 @@ TOPIC_HINT=true
 # L3：判"同一条事实"的字面重合度门槛（0.85 = 只差一两个字也算重复，不触发覆盖）
 DUP_SIMILARITY=0.85
 
+# 主题词归一：把"文件操作偏好""偏好"这种同义写法收敛成固定槽位（文件操作 / 职业 ...）
+# 冲突检测只认 topic 一致，主题词一乱，正反两条就会同时生效，所以建议开着
+TOPIC_CANON=true
+
+# 正反翻转检测：两条字面几乎一样、只差否定词（"要询问" vs "不需要询问"），以新的一条为准
+POLARITY_CHECK=true
+POLARITY_SIMILARITY=0.9
+
 # L2：召回段数、召回原文总长度上限、相似度门槛
 RECALL_BLOCKS=2
 RECALL_MAX_CHARS=600
@@ -187,6 +195,9 @@ NEW_KEYS = [
     ("PACKET_LOG", "true", "把每次出网请求的报文存到 logs/，方便核对发了几次请求"),
     ("LOG_DIR", "", "报文日志目录，留空则脚本同级 logs/"),
     ("DUP_SIMILARITY", "0.85", "判同一事实的字面重合度门槛，低于它才走覆盖"),
+    ("TOPIC_CANON", "true", "主题词归一：把同义写法收敛成固定槽位，冲突检测才抓得住"),
+    ("POLARITY_CHECK", "true", "正反翻转检测：字面只差否定词的两条，以新的一条为准"),
+    ("POLARITY_SIMILARITY", "0.9", "正反翻转判定的字面重合度门槛"),
     ("AGENT_MODE", "true", "智能体循环：开=多步调工具；关=单步请求"),
     ("MAX_STEPS", "6", "一轮最多走几步"),
     ("TOOL_RESULT_MAX_CHARS", "1200", "单次工具返回给模型的字符上限"),
@@ -312,13 +323,98 @@ def error_message(raw):
         return raw[:300]
 
 
+# ---------------------------------------------------------------- 主题词归一
+# 冲突检测全靠 topic 对齐：同 topic 才覆盖。所以 topic 必须是封闭集合，
+# 不能由模型自由发挥——"文件操作偏好" 和 "偏好" 其实是同一个槽位，
+# 一旦拆成两个名字，正反两条事实就会同时挂在档案里生效。
+
+TOPIC_CANON = [
+    ("职业", ("职业", "身份", "岗位", "职位", "工作", "职务")),
+    ("技术栈", ("技术栈", "技能栈", "开发语言", "编程语言", "技术", "技能")),
+    ("回复语言", ("回复语言", "语言偏好", "回复语种", "语种", "语言")),
+    ("回复风格", ("回复风格", "输出风格", "风格偏好", "风格")),
+    ("文件操作", ("文件操作", "文件读写", "文件访问", "写文件", "读写", "文件")),
+    ("饮食", ("饮食", "饮食习惯", "口味", "忌口")),
+    ("项目路径", ("项目路径", "项目目录", "工作目录", "仓库路径", "路径")),
+    ("健康", ("健康状况", "健康", "身体", "体检")),
+    ("学习", ("学习计划", "学习", "备考", "考研")),
+    ("设备", ("设备", "硬件", "开发板")),
+    ("家庭", ("家庭", "家人", "配偶")),
+]
+TOPIC_NAMES = [name for name, _ in TOPIC_CANON]
+# 这些词是"垃圾桶"槽位，本身不携带信息，不许单独占位
+TOPIC_GENERIC = {"偏好", "设置", "习惯", "倾向", "其他", "杂项", "偏好设置"}
+
+# 泛化 topic 丢过来时，用内容里的关键词反推槽位（宁可不占位，也不许用一个 "偏好" 兜所有事）
+TOPIC_KEYWORDS = [
+    ("文件操作", ("文件", "写入", "读取", "保存", "覆盖", "改文件")),
+    ("回复风格", ("风格", "语气", "排版", "篇幅", "详细", "简洁")),
+    ("回复语言", ("语言", "英文", "中文", "语种")),
+    ("职业", ("工程师", "职业", "岗位", "在职", "从业")),
+    ("技术栈", ("python", "c++", "c语言", "rust", "java", "嵌入式", "框架", "工具链")),
+    ("饮食", ("吃", "饮食", "忌口", "素食", "猪肉")),
+    ("项目路径", ("路径", "目录", "盘符", "仓库", "文件夹")),
+    ("健康", ("健康", "体检", "血糖", "血压", "睡眠", "运动")),
+    ("学习", ("学习", "备考", "考研", "课程", "笔记")),
+    ("设备", ("开发板", "rk3568", "stm32", "硬件")),
+    ("家庭", ("配偶", "妻子", "丈夫", "孩子", "家人")),
+]
+
+# 正反翻转的判定词：剥掉它们再比字面，剥完几乎一样而极性相反，就是同一件事的两种说法
+_NEG_WORDS = ("不需要", "不用", "无需", "不必", "不要", "不应", "不该", "禁止",
+              "避免", "不再", "不希望", "不建议", "别", "勿", "不")
+_NEG_RE = re.compile("|".join(sorted(_NEG_WORDS, key=len, reverse=True)))
+
+
+def topic_from_content(content):
+    low = (content or "").lower()
+    for name, words in TOPIC_KEYWORDS:
+        if any(w in low for w in words):
+            return name
+    return ""
+
+
+def canon_topic(topic, content=""):
+    """把模型给的主题词归一到固定槽位。返回 "" 表示这条不占槽位（只按字面去重）。"""
+    t = re.sub(r"[\s“”\"'「」【】()（）]", "", topic or "").strip("-—_/·")
+    if not t:
+        return ""
+    if t in TOPIC_NAMES:
+        return t
+    for name, aliases in TOPIC_CANON:
+        if t in aliases:
+            return name
+    # "文件操作偏好" -> "文件操作"；"饮食习惯类" 同理
+    base = re.sub(r"(偏好|习惯|设置|要求|相关|方面|类)$", "", t)
+    if base and base != t:
+        for name, aliases in TOPIC_CANON:
+            if base == name or base in aliases:
+                return name
+    if t in TOPIC_GENERIC:
+        return topic_from_content(content)
+    # 未知词：看它包含哪个已知写法（只认 2 字以上的别名，避免 "吃" 这种误命中）
+    for name, aliases in TOPIC_CANON:
+        if any(len(a) >= 2 and a in t for a in aliases):
+            return name
+    return t
+
+
+def has_negation(text):
+    return bool(_NEG_RE.search(re.sub(r"\s+", "", text or "")))
+
+
+def strip_negation(text):
+    return _NEG_RE.sub("", re.sub(r"\s+", "", text or ""))
+
+
 # ---------------------------------------------------------------- 抽取用的 schema
 
 FACT_ITEM_SCHEMA = {
     "type": "object",
     "properties": {
         "content": {"type": "string", "description": "一条陈述句事实，如“嵌入式开发工程师”"},
-        "topic": {"type": "string", "description": "主题短词，用来判冲突，如“职业”“回复语言”"},
+        "topic": {"type": "string",
+                  "description": "从候选主题表里原样取一个，如“职业”“文件操作”；不许造同义新词"},
         "scope": {"type": "string", "enum": ["profile", "task"]},
         "confidence": {"type": "number", "description": "0~1，拿不准就低"},
     },
@@ -340,12 +436,19 @@ EXTRACT_RESPONSE_FORMAT = {
 
 EXTRACT_PROMPT = """从下面这一轮对话里抽取"关于用户本人、且跨任务可复用"的稳定事实。
 
-判定规则：
-1. 只记"人是什么样的"：身份、职业、技术栈、长期约束、稳定的偏好、稳定的项目与环境
-2. 不记"这次做了什么"：单次任务、临时上下文、一次性的指令 —— 这类一律标 scope=task
-3. 拿不准的不要硬抽，confidence 给低分或直接不输出
-4. topic 用 2~4 个字的主题词，同一主题的旧事实会被新事实覆盖，所以主题词要稳定
-5. 没有可记的就返回空数组
+只记用户自己明确表态过的：
+1. 身份、职业、技术栈、长期约束、稳定的偏好、稳定的项目与环境
+2. 偏好/要求类，必须能指到用户自己的一句明确表态（"我要…""以后都…""别…""记得…"）。
+   用户只是在提问（"能不能…""有没有办法…"）、在设想或者列举备选（"或者…""如果…"）
+   时说的不算，那是在讨论方案，不是在下结论
+3. 助手提出的建议、方案、解释一律不记 —— 那不是用户的偏好
+4. 不记"这次做了什么"：单次任务、临时上下文、一次性指令
+5. topic 必须从候选主题表里原样取一个，不许造同义新词；一个槽位只出一条
+6. 否定要保留否定词，写成"不要…""不需要…"；反过来把否定改写成肯定，等于凭空造出一条相反的偏好
+7. 拿不准就不输出，或把 confidence 给低分
+8. 没有可记的就返回空数组
+
+候选主题（topic 只能从这里选）：%s
 
 对话如下。
 """
@@ -405,6 +508,9 @@ class MemoryStore(object):
         os.makedirs(self.archive_dir, exist_ok=True)
         self.data = {"version": 1, "entries": []}
         self.dup_sim = float(cfg_get(cfg, "DUP_SIMILARITY", "0.85"))
+        self.topic_canon = cfg_bool(cfg, "TOPIC_CANON", True)
+        self.polarity_check = cfg_bool(cfg, "POLARITY_CHECK", True)
+        self.polarity_sim = float(cfg_get(cfg, "POLARITY_SIMILARITY", "0.9"))
         self._load()
 
     # ---- L3 读写 -------------------------------------------------
@@ -437,8 +543,11 @@ class MemoryStore(object):
         if inactive:
             lines += ["", "## 停用（留痕）"]
             for e in inactive:
-                lines.append("- `%s` %s  <- 被 %s 于 %s 停用" % (
-                    e["id"], e["content"], e.get("deactivated_by", "-"), e.get("deactivated_at", "-")))
+                reason = e.get("deactivated_reason")
+                lines.append("- `%s` %s  <- 被 %s 于 %s 停用%s" % (
+                    e["id"], e["content"], e.get("deactivated_by", "-"),
+                    e.get("deactivated_at", "-"),
+                    "（%s）" % reason if reason else ""))
         with open(self.profile_md, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
 
@@ -449,13 +558,46 @@ class MemoryStore(object):
         return "p%d" % (len(self.data["entries"]) + 1)
 
     def add_fact(self, content, topic="", confidence=1.0, source="", scope="profile"):
-        """写一条。同 topic 的旧生效条目会被停用（覆盖 + 留痕）。"""
+        """写一条。
+
+        覆盖规则三层：
+        1) 正反翻转：字面只差否定词，不论 topic 是否对齐都算冲突，以新的一条为准
+        2) 字面重复：规范化后完全相同，或同槽位高度重合，合并（不新增）
+        3) 同槽位覆盖：topic 已归一，同一个槽位的旧条目停用并留痕
+        """
         content = content.strip()
         if not content:
             return "skip"
+        if self.topic_canon:
+            topic = canon_topic(topic, content)
+        topic = (topic or "").strip()
 
-        # 先判"是不是同一句话"：规范化后完全相同，或同主题且字面高度重合，都算重复。
-        # 只比 strip() 不够——模型两次输出常差一个句号或"是/是一名"，那会误触发覆盖。
+        new_id = self._next_id()
+        replaced = []
+
+        # 1) 正反翻转。必须放在判重之前：否则"要询问"和"不需要询问"会先被判成
+        #    "同槽位高度重合"的 dup 直接丢掉，旧的肯定句反而一直生效。
+        if self.polarity_check:
+            neg_new = has_negation(content)
+            bare_new = self._norm_content(strip_negation(content))
+            for e in self.active_facts():
+                if has_negation(e["content"]) == neg_new:
+                    continue
+                bare_old = self._norm_content(strip_negation(e["content"]))
+                if bare_new and bare_old and \
+                        self._similarity(bare_new, bare_old) >= self.polarity_sim:
+                    e["status"] = "inactive"
+                    e["deactivated_at"] = now_str()
+                    e["deactivated_by"] = new_id
+                    e["deactivated_reason"] = "polarity flip"
+                    replaced.append(e["id"])
+            if replaced:
+                print("[profile] polarity flip: %s superseded by %s" %
+                      (", ".join(replaced), new_id))
+
+        # 2) 判重：规范化后完全相同，或同槽位且字面高度重合，都算重复。
+        #    只比 strip() 不够——模型两次输出常差一个句号或"是/是一名"，那会误触发覆盖。
+        #    已经因正反翻转停用的条目不再参与合并。
         norm_new = self._norm_content(content)
         for e in self.active_facts():
             same_text = self._norm_content(e["content"]) == norm_new
@@ -474,14 +616,14 @@ class MemoryStore(object):
                 self._save()
                 return "dup"
 
-        new_id = self._next_id()
-        replaced = []
+        # 3) 同槽位覆盖
         if topic:
             for e in self.active_facts():
                 if (e.get("topic") or "") == topic:
                     e["status"] = "inactive"
                     e["deactivated_at"] = now_str()
                     e["deactivated_by"] = new_id
+                    e["deactivated_reason"] = "same topic"
                     replaced.append(e["id"])
 
         self.data["entries"].append({
@@ -508,6 +650,23 @@ class MemoryStore(object):
             if t and t not in seen:
                 seen.add(t)
                 out.append(t)
+        return out
+
+    def find_conflicts(self):
+        """扫描生效条目里"剥掉否定词后几乎一样、极性相反"的对子，供人工核对。
+
+        写入口已经拦这类冲突，这里是为历史遗留数据做体检（老档案里可能已经躺着一对）。
+        """
+        out = []
+        active = self.active_facts()
+        for i, a in enumerate(active):
+            for b in active[i + 1:]:
+                if has_negation(a["content"]) == has_negation(b["content"]):
+                    continue
+                ba = self._norm_content(strip_negation(a["content"]))
+                bb = self._norm_content(strip_negation(b["content"]))
+                if ba and bb and self._similarity(ba, bb) >= self.polarity_sim:
+                    out.append((a, b, self._similarity(ba, bb)))
         return out
 
     def deactivate(self, entry_id):
@@ -669,11 +828,11 @@ class MemoryStore(object):
 
 def extract_facts(cfg, api_key, user_text, assistant_text, existing_topics=None):
     """一次 json_schema 调用，只收 profile 类事实。失败返回 []。"""
-    # 把档案里已有的主题词回灌给模型，减少"技术栈 / 技能栈"这种同义新词
-    topics = [t for t in (existing_topics or []) if t][:20]
-    prompt = EXTRACT_PROMPT
-    if topics:
-        prompt += "\n已有主题分类（能归入下面某个就沿用原词，不要造同义新词）：\n"
+    # 候选主题表直接写进 prompt（封闭集合），再补上档案里出现过的自定义主题
+    prompt = EXTRACT_PROMPT % "、".join(TOPIC_NAMES)
+    topics = [t for t in (existing_topics or []) if t and t not in TOPIC_NAMES][:20]
+    if cfg_bool(cfg, "TOPIC_HINT", True) and topics:
+        prompt += "\n档案里已有的自定义主题（能归入就直接用，不要再造新词）：\n"
         prompt += "、".join(topics) + "\n"
     body = {
         "model": cfg_get(cfg, "EXTRACT_MODEL", cfg_get(cfg, "MODEL", "qwen3.8-flash")),
@@ -795,6 +954,7 @@ HELP_TEXT = """commands:
   /clear                    clear L1 window (memory kept)
   /profile                  show structured profile (active + deactivated)
   /profile add [topic]|<text>   add one fact by hand (topic enables override)
+  /profile check            scan active facts for polarity conflicts
   /profile del <id>         deactivate one fact (kept for audit)
   /memory                   archive dir + what was saved today
   /recall <text>            try recall manually, see what snippets come back
@@ -1357,6 +1517,16 @@ def main():
                     elif arg.startswith("del "):
                         ok = store.deactivate(arg[4:].strip())
                         print("[profile]", "deactivated" if ok else "id not found or already inactive")
+                    elif arg == "check":
+                        pairs = store.find_conflicts()
+                        if not pairs:
+                            print("[profile] no polarity conflict in active entries")
+                        else:
+                            print("[profile] %d suspected conflict(s):" % len(pairs))
+                            for a, b, sim in pairs:
+                                print("  %.2f  %s: %s" % (sim, a["id"], a["content"]))
+                                print("        %s: %s" % (b["id"], b["content"]))
+                            print("  fix with: /profile del <id>")
                     else:
                         show_profile(store)
                 elif cmd == "/memory":

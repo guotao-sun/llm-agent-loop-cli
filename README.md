@@ -9,7 +9,8 @@
 再写文件，最后收尾。每一步都是一次独立的 HTTP 请求，脚本负责执行工具、
 把结果拼回 `messages`、再发下一次。
 
-- 三层记忆：`messages` 窗口 / 按天归档 / 结构化档案（同 topic 覆盖留痕）
+- 三层记忆：`messages` 窗口 / 按天归档 / 结构化档案（同槽位覆盖留痕）
+- 档案冲突防护：主题词归一 + 正反翻转检测，别让"要询问"和"不需要询问"同时生效
 - 召回决策：每轮先让模型答一次 `{need_recall, level, query}`，需要才查
 - 工具调用：8 个工具，模型只出 `name + arguments`，执行在本地
 - 技能：`skills/<name>/SKILL.md`，平时只列名字，正文按需 `load_skill`
@@ -43,7 +44,21 @@ skills/                          一个技能一个目录 + SKILL.md
 `list_archive` | 列归档日期与段数 |
 `recall_archive(query)` | 按字符二元组检索归档片段 |
 `read_archive(date, offset)` | 读某天归档原文，可分页 |
-`save_fact(content, topic)` | 写一条稳定事实（同 topic 覆盖并留痕） |
+`save_fact(content, topic)` | 写一条稳定事实（同槽位覆盖并留痕） |
+
+## 档案为什么不会自相矛盾
+
+冲突检测原来只认 `topic` 一致，模型把同一个意思换个主题词，正反两条就会同时生效。
+现在有这三层：
+
+1. **主题词归一**（`TOPIC_CANON`）：`文件操作偏好` / `文件` / `写文件` 都收敛到 `文件操作`，
+   槽位是封闭集合，抽取 prompt 里也只给这张表；`偏好`、`偏好设置` 这类垃圾桶词按内容反推槽位
+2. **正反翻转**（`POLARITY_CHECK` + `POLARITY_SIMILARITY`）：剥掉否定词后字面几乎相同、
+   极性相反的两条，不论 topic 是否对齐都算冲突，以 `updated_at` 晚的一条为准
+3. **抽取口径**：只记用户明确表态过的稳定事实；用户提问、列举备选、助手的建议方案一律不记，
+   否定式不许改写成肯定句
+
+排查历史数据用 `/profile check`，会列出生效条目里涉嫌正反冲突的对子，再 `/profile del <id>` 停用。
 `read_file(path, offset, limit)` | 读工作目录内文本；传目录则列清单 |
 `write_file(path, content, mode)` | 写工作目录内文件，默认逐次询问 |
 `load_skill(name)` | 取某个技能的流程正文 |
