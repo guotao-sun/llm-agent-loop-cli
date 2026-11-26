@@ -29,7 +29,7 @@ skills/                          一个技能一个目录 + SKILL.md
 
 ## 跑起来
 
-1. 复制配置：`cp llm_chat_agent_cli_config.example.txt llm_chat_agent_cli_config.txt`
+1. 复制配置：`llm_chat_agent_cli_config.example.txt` → `llm_chat_agent_cli_config.txt`
 2. 填 `API_KEY=`，或改用环境变量 `DASHSCOPE_API_KEY`
 3. `python -X utf8 llm_chat_agent_cli.py`（3.8+，无第三方依赖）
 
@@ -39,7 +39,7 @@ skills/                          一个技能一个目录 + SKILL.md
 
 | 工具 | 作用 |
 |---|---|
-`get_profile` | 读 Structured Profile 里的生效事实 |
+`get_profile` | 读结构化档案里的生效事实 |
 `list_archive` | 列归档日期与段数 |
 `recall_archive(query)` | 按字符二元组检索归档片段 |
 `read_archive(date, offset)` | 读某天归档原文，可分页 |
@@ -64,4 +64,6 @@ skills/                          一个技能一个目录 + SKILL.md
 
 ## 许可
 
-MIT
+GNU General Public License v3.0 或更新版本（GPL-3.0-or-later），全文见 `LICENSE`。
+
+分发或修改后再发布时，须同样以 GPL 开源并提供源码；不提供担保。

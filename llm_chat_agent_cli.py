@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (C) 2026 guotao-sun
+# 本程序按 GNU GPL v3.0 或更新版本发布，全文见 LICENSE；无任何担保。
+# 修改后再分发须同样以 GPL 开源，并保留本声明。
 """
 命令行多轮对话 + 三层长期记忆（纯标准库）
 
