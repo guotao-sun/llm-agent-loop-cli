@@ -51,7 +51,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_NAME = "llm_chat_agent_cli_config.txt"
 CONFIG_PATH = os.path.join(SCRIPT_DIR, CONFIG_NAME)
 
-DEFAULT_CONFIG = """# 命令行多轮对话 + 三层记忆 的配置文件
+DEFAULT_CONFIG = """# 配置示例：复制为 llm_chat_agent_cli_config.txt，填好 API_KEY（或设环境变量）再运行
 # 键值对写法：KEY=VALUE，井号开头是注释，留空用默认值。
 
 # 百炼的 API Key。留空则读环境变量 DASHSCOPE_API_KEY
@@ -78,6 +78,9 @@ PROFILE_MAX_CHARS=300
 # L3：抽取开关 + 置信度门槛
 EXTRACT_MEMORY=true
 MIN_CONFIDENCE=0.7
+
+# 抽取时把已有主题词回灌给模型，减少同义新词（建议开着）
+TOPIC_HINT=true
 
 # L3：判"同一条事实"的字面重合度门槛（0.85 = 只差一两个字也算重复，不触发覆盖）
 DUP_SIMILARITY=0.85
