@@ -19,7 +19,6 @@
 
 ```
 llm_chat_agent_cli.py            主程序：HTTP、窗口、循环、记忆
-llm_chat_agent_cli_config.example.txt  配置示例（复制成 *_config.txt 再填 key）
 tools/                           一个工具一个 .py
   _fs_guard.py                   文件工具的公共护栏（出界判定 + 保护名单）
 skills/                          一个技能一个目录 + SKILL.md
@@ -29,9 +28,10 @@ skills/                          一个技能一个目录 + SKILL.md
 
 ## 跑起来
 
-1. 复制配置：`llm_chat_agent_cli_config.example.txt` → `llm_chat_agent_cli_config.txt`
-2. 填 `API_KEY=`，或改用环境变量 `DASHSCOPE_API_KEY`
-3. `python -X utf8 llm_chat_agent_cli.py`（3.8+，无第三方依赖）
+1. `python -X utf8 llm_chat_agent_cli.py`（Python 3.8+，无第三方依赖）
+2. **首次运行会自动生成 `llm_chat_agent_cli_config.txt`**：里面有全部可调项和默认值，但 `API_KEY` 还是空的，程序会停下并提示填 key
+3. 把 key 填进 `API_KEY=`（或改用环境变量 `DASHSCOPE_API_KEY`），再运行一次就能对话
+4. 配置文件不进仓库：`.gitignore` 已经把 `*_config.txt` 排除掉
 
 常见命令：`/help` `/tools` `/skills` `/trace` `/profile` `/fs` `/agent on|off`
 

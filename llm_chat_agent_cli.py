@@ -51,7 +51,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_NAME = "llm_chat_agent_cli_config.txt"
 CONFIG_PATH = os.path.join(SCRIPT_DIR, CONFIG_NAME)
 
-DEFAULT_CONFIG = """# 配置示例：复制为 llm_chat_agent_cli_config.txt，填好 API_KEY（或设环境变量）再运行
+DEFAULT_CONFIG = """# 首次运行自动生成的配置模板：填好 API_KEY（或设环境变量）后，再运行一次
 # 键值对写法：KEY=VALUE，井号开头是注释，留空用默认值。
 
 # 百炼的 API Key。留空则读环境变量 DASHSCOPE_API_KEY
