@@ -21,7 +21,9 @@
     退出码 0 = 全部通过，1 = 有用例失败
 """
 
+import copy
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -125,13 +127,15 @@ def make_chat(mod, rec, agent_mode=True, auto_recall=True, decision=None):
 
     mod.decide_recall = fake_decide
 
-    # 把出网请求换成假的，只把 body 存下来
+    # 把出网请求换成假的，只把 body 存下来。
+    # 必须深拷贝：body["messages"] 就是循环里那份 msgs，轮内刷新 system 会就地改它，
+    # 存引用会把"改之前"的历史一起改掉，断言就失真了。
     def fake_step(body):
-        rec.bodies.append(body)
+        rec.bodies.append(copy.deepcopy(body))
         return "ok", []
 
     def fake_stream(body):
-        rec.bodies.append(body)
+        rec.bodies.append(copy.deepcopy(body))
         return "ok"
 
     chat._stream_step = fake_step
@@ -226,6 +230,45 @@ def main():
             print("[selftest] temp kept:", tmp)
         else:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    # 5) 轮内写过档案，下一步的 system 必须刷新
+    rec = Recorder()
+    tmp, chat, store, rec2 = make_chat(mod, rec, agent_mode=True, auto_recall=False)
+
+    def real_save(store_, name, args, cap, ctx):
+        if name == "save_fact":
+            data = json.loads(args)
+            outcome = store_.add_fact(data.get("content", ""), topic=data.get("topic", ""),
+                                      confidence=0.9, source="selftest")
+            return "[save] %s (%s)" % (data.get("content", ""), outcome), "?"
+        return "[fake tool]", "?"
+
+    chat.run_tool = real_save
+
+    steps = {"n": 0}
+
+    def scripted_step(body):
+        rec.bodies.append(copy.deepcopy(body))
+        steps["n"] += 1
+        if steps["n"] == 1:
+            # 第一步：模型决定写一条事实
+            return "", [{"id": "c1", "name": "save_fact",
+                         "args": json.dumps({"content": "用户主力使用 RK3568",
+                                             "topic": "设备", "confidence": 0.9},
+                                            ensure_ascii=False)}]
+        return "done", []
+
+    chat._stream_step = scripted_step
+    try:
+        chat.send_turn("记住我用 RK3568")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    first_system = rec.bodies[0]["messages"][0]["content"]
+    second_system = rec.bodies[1]["messages"][0]["content"]
+    check("mid-turn refresh: first step has no fact",
+          "用户主力使用 RK3568" not in first_system)
+    check("mid-turn refresh: second step sees new fact",
+          "用户主力使用 RK3568" in second_system)
 
     failed = [c for c in CHECKS if not c[1]]
     print("-" * 60)

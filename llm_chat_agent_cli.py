@@ -1196,6 +1196,7 @@ class Chat(object):
         self.last_trace = []
         self.last_steps = 0
         saved = 0
+        profile_dirty = False        # 本轮工具改过档案？下一步请求前要重算 system
         text = ""
         stop_reason = ""
 
@@ -1271,9 +1272,15 @@ class Chat(object):
                 msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
                 if tc["name"] == "save_fact" and result.startswith("[save]"):
                     saved += 1
+                    profile_dirty = True
             if repeated:
                 stop_reason = "repeat"
                 break
+            # 写过档案就重算一次 system：同槽位覆盖会停用旧条目，
+            # 不刷新的话后面几步还在按一条已失效的事实推理。
+            if profile_dirty:
+                profile_dirty = False
+                self._refresh_agent_system(msgs, ctx["recall"])
         else:
             stop_reason = "max_steps"
 
@@ -1304,6 +1311,22 @@ class Chat(object):
             print("[learn] skipped, turn stopped early (%s)" % stop_reason)
 
         self._report_requests(counts)
+
+    def _refresh_agent_system(self, msgs, recall):
+        """Agent 轮内写过档案时，重算并替换 system。
+
+        只在档案块真的变了才替换：没变就一个字不动，不白破 prompt 缓存。
+        返回是否发生了替换。
+        """
+        block = self.store.render_block(self.profile_max)
+        if block == self.last_profile_block:
+            return False
+        if not msgs or msgs[0].get("role") != "system":
+            return False
+        self.last_profile_block = block
+        msgs[0]["content"] = self._compose_system(block, recall)
+        print("[agent] profile changed mid-turn, system refreshed (%d chars)" % len(block))
+        return True
 
     def _stream_step(self, body):
         """流式收一步的结果：拼 content，同时把 tool_calls 的碎片拼起来。

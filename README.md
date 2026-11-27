@@ -82,6 +82,9 @@ skills/                          一个技能一个目录 + SKILL.md
 关掉（或 `/agent recall off`）就只剩模型自己调 `recall_archive`，少一次决策请求，
 代价是"模型没想到就不会查"。`/trace` 会打出本轮召回来源：`auto` / `fixed` / `skip` / `agent-off`。
 
+Agent 轮内如果工具写了档案（`save_fact`），下一步请求前会重算一次 system：同槽位覆盖会把旧条目停用，
+不重算的话后面几步还在按一条已失效的事实推理。没写过、或者档案块一个字没变，就不动 system，避免白破 prompt 缓存。
+
 ## 安全边界（写在代码里，不写在提示词里）
 
 - 文件工具只能碰 `FS_ROOT`（默认脚本同级 `workspace/`），`..`、绝对路径、外指软链一律拒绝
